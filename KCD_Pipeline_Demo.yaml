@@ -407,11 +407,13 @@ deploymentSpec:
           \ *\n\ndef preprocess_data(input_csv: Input[Dataset], output_csv: Output[Dataset]):\n\
           \    import subprocess\n    subprocess.run([\"pip\", \"install\", \"pandas\"\
           ], check=True)\n    import pandas as pd\n\n    df = pd.read_csv(input_csv.path)\n\
-          \    df['cpu_usage'] = df['cpu_usage'] * 10\n    nodes = ['mira-kubeflow2-worker3',\
-          \ 'mira-kubeflow2-worker4', 'mira-kubeflow2-worker5']\n    df = df[df['node'].isin(nodes)].copy()\n\
-          \n    node_mapping = {\n        \"mira-kubeflow2-worker3\": \"Frontend UI\"\
-          ,\n        \"mira-kubeflow2-worker4\": \"Backend Service\",\n        \"\
-          mira-kubeflow2-worker5\": \"Database\"\n    }\n    df['node'] = df['node'].map(node_mapping).fillna(df['node'])\n\
+          \    # Multiply raw cpu_usage column before grouping\n    df['cpu_usage']\
+          \ = df['cpu_usage'] * 10\n\n    # Only keep specific nodes\n    nodes =\
+          \ ['mira-kubeflow2-worker3', 'mira-kubeflow2-worker4', 'mira-kubeflow2-worker5']\n\
+          \    df = df[df['node'].isin(nodes)].copy()\n\n    # Map node names to nicer\
+          \ labels\n    node_mapping = {\n        \"mira-kubeflow2-worker3\": \"Frontend\
+          \ UI\",\n        \"mira-kubeflow2-worker4\": \"Backend Service\",\n    \
+          \    \"mira-kubeflow2-worker5\": \"Database\"\n    }\n    df['node'] = df['node'].map(node_mapping).fillna(df['node'])\n\
           \    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')\n\n   \
           \ df = (\n        df.groupby([pd.Grouper(key='timestamp', freq='30min'),\
           \ 'node'])\n          .agg({'cpu_usage': ['mean', 'min', 'max']})\n    \
@@ -419,17 +421,23 @@ deploymentSpec:
           \ 'cpu_usage_min', 'cpu_usage_max']\n    df['weekday'] = df['timestamp'].dt.weekday\n\
           \    df['is_weekend'] = df['weekday'].isin([5, 6]).astype(int)\n    df['hour']\
           \ = df['timestamp'].dt.hour\n    df['month'] = df['timestamp'].dt.month\n\
-          \    df['day'] = df['timestamp'].dt.day\n\n    for lag in range(1, 4):\n\
-          \        df[f'cpu_mean_lag{lag}'] = df.groupby('node')['cpu_usage_mean'].shift(lag)\n\
+          \    df['day'] = df['timestamp'].dt.day\n\n    # creates lag features \u2014\
+          \ columns with values from 3 intervals back\n    # These features say: \"\
+          What was the CPU a moment ago?\" - this helps the model detect trends.\n\
+          \n    for lag in range(1, 4):\n        df[f'cpu_mean_lag{lag}'] = df.groupby('node')['cpu_usage_mean'].shift(lag)\n\
           \        df[f'cpu_min_lag{lag}'] = df.groupby('node')['cpu_usage_min'].shift(lag)\n\
           \        df[f'cpu_max_lag{lag}'] = df.groupby('node')['cpu_usage_max'].shift(lag)\n\
-          \n    df['cpu_mean_roll2'] = df.groupby('node')['cpu_usage_mean'].transform(lambda\
+          \n    # These are rolling features:\n    # .shift(1) means: shift back,\
+          \ do not include the current value (so as not to \"steal\" the future).\n\
+          \    # average CPU for the last 2 intervals (excluding the current one)\n\
+          \    df['cpu_mean_roll2'] = df.groupby('node')['cpu_usage_mean'].transform(lambda\
           \ x: x.shift(1).rolling(2).mean())\n    df['cpu_mean_roll3'] = df.groupby('node')['cpu_usage_mean'].transform(lambda\
           \ x: x.shift(1).rolling(3).mean())\n    df['cpu_max_roll2'] = df.groupby('node')['cpu_usage_max'].transform(lambda\
           \ x: x.shift(1).rolling(2).max())\n    df['cpu_max_roll3'] = df.groupby('node')['cpu_usage_max'].transform(lambda\
-          \ x: x.shift(1).rolling(3).max())\n\n    df = df.dropna().reset_index(drop=True)\n\
-          \    df.to_csv(output_csv.path, index=False)\n    print(\"Preprocessing\
-          \ complete. Final rows:\", len(df))\n\n"
+          \ x: x.shift(1).rolling(3).max())\n\n    # remove all rows that contain\
+          \ NaN/missing values\n    df = df.dropna().reset_index(drop=True)\n    df.to_csv(output_csv.path,\
+          \ index=False)\n    print(\"Preprocessing complete. Final rows:\", len(df))\n\
+          \n"
         image: python:3.10
     exec-train-model:
       container:
