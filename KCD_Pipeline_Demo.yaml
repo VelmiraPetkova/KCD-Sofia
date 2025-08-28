@@ -1,0 +1,673 @@
+# PIPELINE DEFINITION
+# Name: kcd-bulgaria
+components:
+  comp-aggregate-nodes-and-predict:
+    executorLabel: exec-aggregate-nodes-and-predict
+    inputDefinitions:
+      artifacts:
+        input_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        input_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_pdf:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-classify-cpu-usage:
+    executorLabel: exec-classify-cpu-usage
+    inputDefinitions:
+      artifacts:
+        input_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_pdf:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-evaluate-model:
+    executorLabel: exec-evaluate-model
+    inputDefinitions:
+      artifacts:
+        input_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        input_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_pdf:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        output_report:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-load-data-from-prometheus:
+    executorLabel: exec-load-data-from-prometheus
+    outputDefinitions:
+      artifacts:
+        output_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-preprocess-data:
+    executorLabel: exec-preprocess-data
+    inputDefinitions:
+      artifacts:
+        input_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      artifacts:
+        input_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        output_pdf:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-what-if-simulator:
+    executorLabel: exec-what-if-simulator
+    inputDefinitions:
+      artifacts:
+        input_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        input_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_pdf:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-aggregate-nodes-and-predict:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - aggregate_nodes_and_predict
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef aggregate_nodes_and_predict(\n    input_csv: Input[Dataset],\n\
+          \    input_model: Input[Dataset],\n    output_pdf: Output[Dataset]\n):\n\
+          \    import subprocess\n    subprocess.run([\n        \"pip\", \"install\"\
+          , \"pandas\", \"numpy\", \"matplotlib\", \"joblib\", \"xgboost==2.0.3\"\n\
+          \    ], check=True)\n\n    import pandas as pd\n    import numpy as np\n\
+          \    import joblib\n    import matplotlib.pyplot as plt\n    from matplotlib.backends.backend_pdf\
+          \ import PdfPages\n\n    FEATURE_COLUMNS = [\n        'cpu_mean_lag1','cpu_mean_lag2','cpu_mean_lag3',\n\
+          \        'cpu_min_lag1','cpu_min_lag2','cpu_min_lag3',\n        'cpu_max_lag1','cpu_max_lag2','cpu_max_lag3',\n\
+          \        'cpu_mean_roll2','cpu_mean_roll3','cpu_max_roll2','cpu_max_roll3',\n\
+          \        'weekday','is_weekend','hour','month','day'\n    ]\n\n    df =\
+          \ pd.read_csv(input_csv.path)\n    df['timestamp'] = pd.to_datetime(df['timestamp'])\n\
+          \    models = joblib.load(input_model.path)\n\n\n    agg_df = df.groupby('timestamp').agg({\n\
+          \        'cpu_usage_mean': 'sum',\n        'cpu_usage_min': 'sum',\n   \
+          \     'cpu_usage_max': 'sum'\n    }).reset_index()\n\n    future_steps =\
+          \ 24  # 12h = 24 * 30min\n    last_known_per_node = {\n        node_name:\
+          \ node_df.tail(3).copy().reset_index(drop=True)\n        for node_name,\
+          \ node_df in df.groupby('node')\n        if node_name in models\n    }\n\
+          \n    predictions_per_scenario = {'baseline': []}\n\n    for step in range(future_steps):\n\
+          \        next_ts = agg_df['timestamp'].iloc[-1] + pd.Timedelta(minutes=30)\n\
+          \        agg_pred = 0.0\n\n\n        for node_name, last_known in last_known_per_node.items():\n\
+          \            model = models[node_name]\n            X_input = pd.DataFrame({\n\
+          \                'cpu_mean_lag1': [last_known['cpu_usage_mean'].iloc[-1]],\n\
+          \                'cpu_mean_lag2': [last_known['cpu_usage_mean'].iloc[-2]],\n\
+          \                'cpu_mean_lag3': [last_known['cpu_usage_mean'].iloc[-3]],\n\
+          \                'cpu_min_lag1': [last_known['cpu_usage_min'].iloc[-1]],\n\
+          \                'cpu_min_lag2': [last_known['cpu_usage_min'].iloc[-2]],\n\
+          \                'cpu_min_lag3': [last_known['cpu_usage_min'].iloc[-3]],\n\
+          \                'cpu_max_lag1': [last_known['cpu_usage_max'].iloc[-1]],\n\
+          \                'cpu_max_lag2': [last_known['cpu_usage_max'].iloc[-2]],\n\
+          \                'cpu_max_lag3': [last_known['cpu_usage_max'].iloc[-3]],\n\
+          \                'cpu_mean_roll2': [last_known['cpu_usage_mean'].iloc[-2:].mean()],\n\
+          \                'cpu_mean_roll3': [last_known['cpu_usage_mean'].iloc[-3:].mean()],\n\
+          \                'cpu_max_roll2': [last_known['cpu_usage_max'].iloc[-2:].max()],\n\
+          \                'cpu_max_roll3': [last_known['cpu_usage_max'].iloc[-3:].max()],\n\
+          \                'weekday': [next_ts.weekday()],\n                'is_weekend':\
+          \ [int(next_ts.weekday() >= 5)],\n                'hour': [next_ts.hour],\n\
+          \                'month': [next_ts.month],\n                'day': [next_ts.day]\n\
+          \            })\n            y_pred = model.predict(X_input)[0]\n      \
+          \      agg_pred += y_pred\n\n\n            new_row = last_known.iloc[-1].copy()\n\
+          \            new_row['cpu_usage_mean'] = y_pred\n            new_row['timestamp']\
+          \ = next_ts\n            last_known_per_node[node_name] = pd.concat([last_known,\
+          \ new_row.to_frame().T], ignore_index=True)\n\n        predictions_per_scenario['baseline'].append((next_ts,\
+          \ agg_pred))\n        agg_df = pd.concat([agg_df, pd.DataFrame({'timestamp':[next_ts],'cpu_usage_mean':[agg_pred]})],\
+          \ ignore_index=True)\n\n\n    with PdfPages(output_pdf.path) as pdf:\n \
+          \       plt.figure(figsize=(14,6))\n        plt.plot(df.groupby('timestamp')['cpu_usage_mean'].sum(),\
+          \ label=\"Historical aggregated CPU\", color=\"blue\")\n        pred_ts,\
+          \ pred_vals = zip(*predictions_per_scenario['baseline'])\n        plt.plot(pred_ts,\
+          \ pred_vals, label=\"Predicted aggregated CPU\", color=\"orange\", marker=\"\
+          o\")\n        plt.title(\"Aggregated Node CPU Forecast\")\n        plt.xlabel(\"\
+          Timestamp (UTC)\")\n        plt.ylabel(\"CPU usage (sum of nodes)\")\n \
+          \       plt.legend()\n        plt.grid(True)\n        pdf.savefig()\n  \
+          \      plt.close()\n\n    print(\"Aggregated node prediction PDF generated\
+          \ successfully.\")\n\n"
+        image: python:3.10
+    exec-classify-cpu-usage:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - classify_cpu_usage
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef classify_cpu_usage(input_csv: Input[Dataset], output_pdf: Output[Dataset]):\n\
+          \    import subprocess\n    subprocess.run([\"pip\", \"install\", \"pandas\"\
+          , \"matplotlib\", \"seaborn\"], check=True)\n    import pandas as pd\n \
+          \   import matplotlib.pyplot as plt\n    import seaborn as sns\n    from\
+          \ matplotlib.backends.backend_pdf import PdfPages\n\n    declared_cpu_map\
+          \ = {'Frontend UI': 2, 'Backend Service': 2.5, 'Database': 2.5}\n\n    df\
+          \ = pd.read_csv(input_csv.path)\n    df['declared_cpu'] = df['node'].map(declared_cpu_map)\n\
+          \    df['timestamp'] = pd.to_datetime(df['timestamp'])\n    df['cpu_ratio']\
+          \ = df['cpu_usage_mean'] / df['declared_cpu']\n\n    def classify(r):\n\
+          \        if r < 0.1:\n            return \"Low usage\"\n        elif r <=\
+          \ 0.5:\n            return \"Optimal\"\n        else:\n            return\
+          \ \"High usage\"\n\n    df['usage_class'] = df['cpu_ratio'].apply(classify)\n\
+          \    recommendations = []\n    for node, group in df.groupby('node'):\n\
+          \        avg_ratio = group['cpu_ratio'].mean()\n        if avg_ratio < 0.1:\n\
+          \            recommendations.append(f\"{node}: Low usage \u2192 consider\
+          \ reducing allocated resources\")\n        elif avg_ratio > 0.5:\n     \
+          \       recommendations.append(f\"{node}: High usage \u2192 consider increasing\
+          \ CPU or scaling pods\")\n        else:\n            recommendations.append(f\"\
+          {node}: Optimal resource utilization\")\n\n    with PdfPages(output_pdf.path)\
+          \ as pdf:\n        plt.figure(figsize=(8, 6))\n        plt.axis('off')\n\
+          \        plt.title(\"CPU Usage Recommendations\", fontsize=16)\n       \
+          \ plt.text(0, 0.9, \"\\n\".join(recommendations), fontsize=12)\n       \
+          \ pdf.savefig()\n        plt.close()\n\n        for node, group in df.groupby('node'):\n\
+          \            plt.figure(figsize=(12, 5))\n            sns.lineplot(\n  \
+          \              data=group,\n                x='timestamp',\n           \
+          \     y='cpu_ratio',\n                hue='usage_class',\n             \
+          \   palette={'Low usage': 'blue', 'Optimal': 'green', 'High usage': 'red'}\n\
+          \            )\n            plt.axhline(0.7, color='yellow', linestyle='--',\
+          \ label='Optimal threshold (0.7)')\n            plt.axhline(1.0, color='red',\
+          \ linestyle='--', label='Max threshold (1.0)')\n            plt.title(f\"\
+          CPU Utilization Ratio Over Time for Node: {node}\")\n            plt.ylabel(\"\
+          CPU Utilization Ratio (used / declared)\")\n            plt.xlabel(\"Timestamp\
+          \ (UTC)\")\n            plt.legend()\n            plt.grid(True)\n     \
+          \       pdf.savefig()\n            plt.close()\n\n    print(\"CPU usage\
+          \ classification and recommendations PDF generated.\")\n\n"
+        image: python:3.10
+    exec-evaluate-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate_model(input_csv: Input[Dataset], input_model: Input[Dataset],\
+          \ output_report: Output[Dataset], output_pdf: Output[Dataset]):\n    import\
+          \ subprocess\n    subprocess.run([\n        \"pip\", \"install\", \"pandas\"\
+          , \"numpy\", \"scikit-learn\",\n        \"matplotlib\", \"seaborn\", \"\
+          joblib\", \"xgboost==1.7.6\"\n    ], check=True)\n\n    import pandas as\
+          \ pd\n    import numpy as np\n    import joblib\n    from sklearn.metrics\
+          \ import mean_squared_error\n    import matplotlib.pyplot as plt\n    from\
+          \ matplotlib.backends.backend_pdf import PdfPages\n\n    FEATURE_COLUMNS\
+          \ = [\n        'cpu_mean_lag1','cpu_mean_lag2','cpu_mean_lag3',\n      \
+          \  'cpu_min_lag1','cpu_min_lag2','cpu_min_lag3',\n        'cpu_max_lag1','cpu_max_lag2','cpu_max_lag3',\n\
+          \        'cpu_mean_roll2','cpu_mean_roll3','cpu_max_roll2','cpu_max_roll3',\n\
+          \        'weekday','is_weekend','hour','month','day'\n    ]\n\n    df =\
+          \ pd.read_csv(input_csv.path)\n    df['timestamp'] = pd.to_datetime(df['timestamp'])\n\
+          \    models = joblib.load(input_model.path)\n    report_lines = []\n   \
+          \ future_steps = 48\n\n    with PdfPages(output_pdf.path) as pdf:\n    \
+          \    for node_name, node_df in df.groupby('node'):\n            if node_name\
+          \ not in models or len(node_df) < 6:\n                continue\n       \
+          \     model = models[node_name]\n\n            test_df = node_df.tail(20)\n\
+          \            X_test = test_df[FEATURE_COLUMNS]\n            y_test = test_df['cpu_usage_mean']\n\
+          \            y_pred_test = model.predict(X_test)\n            rmse = np.sqrt(mean_squared_error(y_test,\
+          \ y_pred_test))\n            report_lines.append(f\"{node_name} RMSE (last\
+          \ 20 points): {rmse:.4f}\")\n\n            last_known = node_df.tail(3).copy().reset_index(drop=True)\n\
+          \            predictions = []\n\n            for step in range(future_steps):\n\
+          \                last_ts = last_known['timestamp'].iloc[-1]\n          \
+          \      next_ts = last_ts + pd.Timedelta(minutes=30)\n                X_input\
+          \ = pd.DataFrame({col: [last_known[col].iloc[-1]] for col in FEATURE_COLUMNS})\n\
+          \                y_pred = model.predict(X_input)[0]\n                predictions.append(y_pred)\n\
+          \                new_row = last_known.iloc[-1].copy()\n                new_row['cpu_usage_mean']\
+          \ = y_pred\n                new_row['timestamp'] = next_ts\n           \
+          \     last_known = pd.concat([last_known, new_row.to_frame().T], ignore_index=True)\n\
+          \n            plt.figure(figsize=(14,6))\n            plt.plot(node_df['timestamp'],\
+          \ node_df['cpu_usage_mean'], label='Historical CPU usage (mean)', color='blue')\n\
+          \            x_axis = pd.date_range(start=last_known['timestamp'].iloc[2],\
+          \ periods=future_steps+1, freq='30min')[1:]\n            plt.plot(x_axis,\
+          \ predictions, label='Predicted CPU usage (mean)', color='orange', marker='o')\n\
+          \            plt.plot(last_known['timestamp'].iloc[:3], last_known['cpu_usage_mean'].iloc[:3],\
+          \ label='Last known CPU values', color='green', marker='x')\n          \
+          \  plt.xlabel('Timestamp (UTC)')\n            plt.ylabel('CPU usage (seconds)')\n\
+          \            plt.title(f\"Historical + 1-day Forecast for Node: {node_name}\\\
+          nRMSE (last 20 points): {rmse:.4f}\")\n            plt.legend()\n      \
+          \      plt.grid(True)\n            pdf.savefig()\n            plt.close()\n\
+          \n    with open(output_report.path, \"w\") as f:\n        f.write(\"\\n\"\
+          .join(report_lines))\n    print(\"Evaluation done with combined historical\
+          \ + forecast plots, 1-day multi-step prediction, and RMSE.\")\n\n"
+        image: python:3.10
+    exec-load-data-from-prometheus:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_data_from_prometheus
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_data_from_prometheus(output_csv: Output[Dataset]):\n   \
+          \ import subprocess\n    subprocess.run([\"pip\", \"install\", \"requests\"\
+          , \"pandas\"], check=True)\n    import requests\n    import pandas as pd\n\
+          \    from datetime import datetime, timedelta\n\n    prometheus_url = \"\
+          http://prometheus-server.monitoring.svc/api/v1/query_range\"\n    query\
+          \ = 'rate(container_cpu_usage_seconds_total{container!=\"\",pod!=\"\",namespace!=\"\
+          \",kubernetes_io_hostname!=\"\"}[5m])'\n\n    num_days = 7\n    all_rows\
+          \ = []\n\n    for day_offset in range(num_days):\n        end_dt = datetime.utcnow()\
+          \ - timedelta(days=day_offset)\n        start_dt = end_dt - timedelta(days=1)\n\
+          \        start_time = int(start_dt.timestamp())\n        end_time = int(end_dt.timestamp())\n\
+          \        params = {\"query\": query, \"start\": start_time, \"end\": end_time,\
+          \ \"step\": \"60s\"}\n        response = requests.get(prometheus_url, params=params)\n\
+          \        result = response.json()[\"data\"][\"result\"]\n\n        for series\
+          \ in result:\n            metric = series[\"metric\"]\n            for ts,\
+          \ val in series[\"values\"]:\n                all_rows.append({\n      \
+          \              \"timestamp\": int(float(ts)),\n                    \"cpu_usage\"\
+          : float(val),\n                    \"namespace\": metric.get(\"namespace\"\
+          , \"\"),\n                    \"pod\": metric.get(\"pod\", \"\"),\n    \
+          \                \"container\": metric.get(\"container\", \"\"),\n     \
+          \               \"node\": metric.get(\"kubernetes_io_hostname\", \"\")\n\
+          \                })\n\n    df = pd.DataFrame(all_rows)\n    df.to_csv(output_csv.path,\
+          \ index=False)\n    print(f\"Loaded {len(df)} rows from the past {num_days}\
+          \ days.\")\n\n"
+        image: python:3.10
+    exec-preprocess-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - preprocess_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef preprocess_data(input_csv: Input[Dataset], output_csv: Output[Dataset]):\n\
+          \    import subprocess\n    subprocess.run([\"pip\", \"install\", \"pandas\"\
+          ], check=True)\n    import pandas as pd\n\n    df = pd.read_csv(input_csv.path)\n\
+          \    df['cpu_usage'] = df['cpu_usage'] * 10\n    nodes = ['mira-kubeflow2-worker3',\
+          \ 'mira-kubeflow2-worker4', 'mira-kubeflow2-worker5']\n    df = df[df['node'].isin(nodes)].copy()\n\
+          \n    node_mapping = {\n        \"mira-kubeflow2-worker3\": \"Frontend UI\"\
+          ,\n        \"mira-kubeflow2-worker4\": \"Backend Service\",\n        \"\
+          mira-kubeflow2-worker5\": \"Database\"\n    }\n    df['node'] = df['node'].map(node_mapping).fillna(df['node'])\n\
+          \    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')\n\n   \
+          \ df = (\n        df.groupby([pd.Grouper(key='timestamp', freq='30min'),\
+          \ 'node'])\n          .agg({'cpu_usage': ['mean', 'min', 'max']})\n    \
+          \      .reset_index()\n    )\n    df.columns = ['timestamp', 'node', 'cpu_usage_mean',\
+          \ 'cpu_usage_min', 'cpu_usage_max']\n    df['weekday'] = df['timestamp'].dt.weekday\n\
+          \    df['is_weekend'] = df['weekday'].isin([5, 6]).astype(int)\n    df['hour']\
+          \ = df['timestamp'].dt.hour\n    df['month'] = df['timestamp'].dt.month\n\
+          \    df['day'] = df['timestamp'].dt.day\n\n    for lag in range(1, 4):\n\
+          \        df[f'cpu_mean_lag{lag}'] = df.groupby('node')['cpu_usage_mean'].shift(lag)\n\
+          \        df[f'cpu_min_lag{lag}'] = df.groupby('node')['cpu_usage_min'].shift(lag)\n\
+          \        df[f'cpu_max_lag{lag}'] = df.groupby('node')['cpu_usage_max'].shift(lag)\n\
+          \n    df['cpu_mean_roll2'] = df.groupby('node')['cpu_usage_mean'].transform(lambda\
+          \ x: x.shift(1).rolling(2).mean())\n    df['cpu_mean_roll3'] = df.groupby('node')['cpu_usage_mean'].transform(lambda\
+          \ x: x.shift(1).rolling(3).mean())\n    df['cpu_max_roll2'] = df.groupby('node')['cpu_usage_max'].transform(lambda\
+          \ x: x.shift(1).rolling(2).max())\n    df['cpu_max_roll3'] = df.groupby('node')['cpu_usage_max'].transform(lambda\
+          \ x: x.shift(1).rolling(3).max())\n\n    df = df.dropna().reset_index(drop=True)\n\
+          \    df.to_csv(output_csv.path, index=False)\n    print(\"Preprocessing\
+          \ complete. Final rows:\", len(df))\n\n"
+        image: python:3.10
+    exec-train-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_model(input_csv: Input[Dataset], output_model: Output[Dataset],\
+          \ output_pdf: Output[Dataset]):\n    import subprocess\n    subprocess.run([\n\
+          \        \"pip\", \"install\", \"pandas\", \"numpy\", \"xgboost==1.7.6\"\
+          ,\n        \"scikit-learn\", \"joblib\", \"matplotlib\", \"graphviz\"\n\
+          \    ], check=True)\n    subprocess.run([\"apt-get\", \"update\"], check=True)\n\
+          \    subprocess.run([\"apt-get\", \"install\", \"-y\", \"graphviz\"], check=True)\n\
+          \n    import pandas as pd\n    import xgboost as xgb\n    import joblib\n\
+          \    import matplotlib.pyplot as plt\n    from matplotlib.backends.backend_pdf\
+          \ import PdfPages\n    from xgboost import plot_tree\n\n    FEATURE_COLUMNS\
+          \ = [\n        'cpu_mean_lag1','cpu_mean_lag2','cpu_mean_lag3',\n      \
+          \  'cpu_min_lag1','cpu_min_lag2','cpu_min_lag3',\n        'cpu_max_lag1','cpu_max_lag2','cpu_max_lag3',\n\
+          \        'cpu_mean_roll2','cpu_mean_roll3','cpu_max_roll2','cpu_max_roll3',\n\
+          \        'weekday','is_weekend','hour','month','day'\n    ]\n\n    df =\
+          \ pd.read_csv(input_csv.path)\n    models = {}\n    with PdfPages(output_pdf.path)\
+          \ as pdf:\n        for node_name, node_df in df.groupby('node'):\n     \
+          \       if len(node_df) < 10:\n                continue\n\n            test_size\
+          \ = min(4, len(node_df)//4)\n            train_df = node_df.iloc[:-test_size]\n\
+          \            test_df = node_df.iloc[-test_size:]\n\n            X_train\
+          \ = train_df[FEATURE_COLUMNS]\n            y_train = train_df['cpu_usage_mean']\n\
+          \            X_test = test_df[FEATURE_COLUMNS]\n            y_test = test_df['cpu_usage_mean']\n\
+          \n            model = xgb.XGBRegressor(\n                objective='reg:squarederror',\n\
+          \                n_estimators=200,\n                learning_rate=0.05,\n\
+          \                max_depth=5,\n                subsample=0.8,\n        \
+          \        random_state=42\n            )\n\n            model.fit(X_train,\
+          \ y_train, eval_set=[(X_test, y_test)], early_stopping_rounds=10, verbose=False)\n\
+          \            models[node_name] = model\n\n            plt.figure(figsize=(20,\
+          \ 10))\n            plot_tree(model, num_trees=0)\n            plt.title(f\"\
+          XGBoost Tree for node {node_name}\")\n            pdf.savefig()\n      \
+          \      plt.close()\n\n    joblib.dump(models, output_model.path)\n    print(\"\
+          Saved models for nodes:\", list(models.keys()))\n\n"
+        image: python:3.10
+    exec-what-if-simulator:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - what_if_simulator
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef what_if_simulator(input_csv: Input[Dataset], input_model: Input[Dataset],\
+          \ output_pdf: Output[Dataset]):\n    import subprocess\n    subprocess.run([\n\
+          \        \"pip\", \"install\", \"pandas\", \"numpy\", \"scikit-learn\",\
+          \ \"xgboost==2.0.3\",\n        \"joblib\", \"matplotlib\", \"graphviz\"\n\
+          \    ], check=True)\n    import pandas as pd\n    import numpy as np\n \
+          \   import joblib\n    import matplotlib.pyplot as plt\n    from matplotlib.backends.backend_pdf\
+          \ import PdfPages\n\n    FEATURE_COLUMNS = [\n        'cpu_mean_lag1','cpu_mean_lag2','cpu_mean_lag3',\n\
+          \        'cpu_min_lag1','cpu_min_lag2','cpu_min_lag3',\n        'cpu_max_lag1','cpu_max_lag2','cpu_max_lag3',\n\
+          \        'cpu_mean_roll2','cpu_mean_roll3','cpu_max_roll2','cpu_max_roll3',\n\
+          \        'weekday','is_weekend','hour','month','day'\n    ]\n\n    df =\
+          \ pd.read_csv(input_csv.path)\n    df['timestamp'] = pd.to_datetime(df['timestamp'])\n\
+          \    models = joblib.load(input_model.path)\n    scenarios = {\"baseline\"\
+          : 1.0, \"scale_up\": 1.5, \"scale_down\": 0.7}\n\n    with PdfPages(output_pdf.path)\
+          \ as pdf:\n        for node_name, node_df in df.groupby('node'):\n     \
+          \       if node_name not in models or len(node_df) < 6:\n              \
+          \  continue\n            model = models[node_name]\n            last_known\
+          \ = node_df.tail(3).copy().reset_index(drop=True)\n            future_steps\
+          \ = 24\n            predictions_per_scenario = {}\n\n            for scenario,\
+          \ factor in scenarios.items():\n                last_sim = last_known.copy()\n\
+          \                predictions = []\n                for step in range(future_steps):\n\
+          \                    next_ts = last_sim['timestamp'].iloc[-1] + pd.Timedelta(minutes=30)\n\
+          \                    X_input = pd.DataFrame({col: [last_sim[col].iloc[-1]]\
+          \ for col in FEATURE_COLUMNS})\n                    y_pred = model.predict(X_input)[0]\
+          \ * factor\n                    predictions.append(y_pred)\n           \
+          \         new_row = last_sim.iloc[-1].copy()\n                    new_row['cpu_usage_mean']\
+          \ = y_pred\n                    new_row['timestamp'] = next_ts\n       \
+          \             last_sim = pd.concat([last_sim, new_row.to_frame().T], ignore_index=True)\n\
+          \                predictions_per_scenario[scenario] = (last_sim['timestamp'].iloc[3:],\
+          \ predictions)\n\n            plt.figure(figsize=(14,6))\n            plt.plot(node_df['timestamp'],\
+          \ node_df['cpu_usage_mean'], label=\"Historical\", color=\"blue\")\n   \
+          \         for scenario, (x_axis, preds) in predictions_per_scenario.items():\n\
+          \                plt.plot(x_axis, preds, marker=\"o\", label=f\"Predicted\
+          \ ({scenario})\")\n            plt.title(f\"What-if Simulator for {node_name}\"\
+          )\n            plt.xlabel(\"Timestamp (UTC)\")\n            plt.ylabel(\"\
+          CPU usage (seconds)\")\n            plt.legend()\n            plt.grid(True)\n\
+          \            pdf.savefig()\n            plt.close()\n\n    print(\"What-if\
+          \ simulation completed and PDF saved.\")\n\n"
+        image: python:3.10
+pipelineInfo:
+  name: kcd-bulgaria
+root:
+  dag:
+    tasks:
+      aggregate-nodes-and-predict:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-aggregate-nodes-and-predict
+        dependentTasks:
+        - preprocess-data
+        - train-model
+        inputs:
+          artifacts:
+            input_csv:
+              taskOutputArtifact:
+                outputArtifactKey: output_csv
+                producerTask: preprocess-data
+            input_model:
+              taskOutputArtifact:
+                outputArtifactKey: output_model
+                producerTask: train-model
+        taskInfo:
+          name: aggregate-nodes-and-predict
+      classify-cpu-usage:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-classify-cpu-usage
+        dependentTasks:
+        - preprocess-data
+        inputs:
+          artifacts:
+            input_csv:
+              taskOutputArtifact:
+                outputArtifactKey: output_csv
+                producerTask: preprocess-data
+        taskInfo:
+          name: classify-cpu-usage
+      evaluate-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate-model
+        dependentTasks:
+        - preprocess-data
+        - train-model
+        inputs:
+          artifacts:
+            input_csv:
+              taskOutputArtifact:
+                outputArtifactKey: output_csv
+                producerTask: preprocess-data
+            input_model:
+              taskOutputArtifact:
+                outputArtifactKey: output_model
+                producerTask: train-model
+        taskInfo:
+          name: evaluate-model
+      load-data-from-prometheus:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-load-data-from-prometheus
+        taskInfo:
+          name: load-data-from-prometheus
+      preprocess-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-preprocess-data
+        dependentTasks:
+        - load-data-from-prometheus
+        inputs:
+          artifacts:
+            input_csv:
+              taskOutputArtifact:
+                outputArtifactKey: output_csv
+                producerTask: load-data-from-prometheus
+        taskInfo:
+          name: preprocess-data
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        dependentTasks:
+        - preprocess-data
+        inputs:
+          artifacts:
+            input_csv:
+              taskOutputArtifact:
+                outputArtifactKey: output_csv
+                producerTask: preprocess-data
+        taskInfo:
+          name: train-model
+      what-if-simulator:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-what-if-simulator
+        dependentTasks:
+        - preprocess-data
+        - train-model
+        inputs:
+          artifacts:
+            input_csv:
+              taskOutputArtifact:
+                outputArtifactKey: output_csv
+                producerTask: preprocess-data
+            input_model:
+              taskOutputArtifact:
+                outputArtifactKey: output_model
+                producerTask: train-model
+        taskInfo:
+          name: what-if-simulator
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.13.0
