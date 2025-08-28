@@ -224,7 +224,7 @@ kfp pipeline create -p KCDBulgariataiDemo KCD_Pipeline_Demo.yaml
 * **PDF reports**:
 
   
-*  ![Model decision trees](Screenshot 2025-08-28 at 17.16.45.png)
+*  ![Model decision trees](XGBoostTree.png)
   * Forecast vs historical CPU usage
   * CPU usage classification and recommendations
   * What-if scenario simulation
@@ -259,21 +259,21 @@ Here’s an example of the pipeline output for the Backend Service node:
 
 **Historical + Forecast Plot (24h):**
 
-![Backend Service Forecast](Screenshot 2025-08-28 at 17.11.01.png)
+![Backend Service Forecast](HistoricalAndForcast.png)
 
 - Most of the time CPU usage is around 1.5, with short dips.
 - Shows lower usage during weekends and off-hours.
 
 **What-if Simulation Example:**
 
-![Backend Service What-If](Screenshot 2025-08-28 at 17.13.28.png)
+![Backend Service What-If](whatIfSimulator.png)
 
 - Baseline, scale-up (+50%), and scale-down (-30%) scenarios.
 - Helps plan resource adjustments proactively.
 
 **Aggregated Node CPU Forecast:**
 
-![Backend Service What- If](Screenshot 2025-08-28 at 17.14.42.png)
+![Backend Service What- If](AggregateNodeCPU.png)
 
 
 
